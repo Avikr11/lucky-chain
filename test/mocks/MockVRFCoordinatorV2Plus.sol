@@ -7,6 +7,7 @@ contract MockVRFCoordinatorV2Plus {
     uint256 public nextRequestId = 1;
     uint256 public lastRequestId;
     uint256 public requestCount;
+    uint256 public lastCallbackGasUsed;
 
     bool public shouldRevertRequest;
 
@@ -22,9 +23,32 @@ contract MockVRFCoordinatorV2Plus {
         requestCount++;
     }
 
+    // Existing unrestricted fulfillment, retained for existing tests.
     function fulfill(address consumer, uint256 requestId, uint256[] calldata randomWords) external {
         (bool success, bytes memory returnData) =
             consumer.call(abi.encodeWithSignature("rawFulfillRandomWords(uint256,uint256[])", requestId, randomWords));
+
+        if (!success) {
+            assembly {
+                revert(add(returnData, 32), mload(returnData))
+            }
+        }
+    }
+
+    // Simulates Chainlink fulfillment with a bounded callback gas limit.
+    function fulfillWithGas(
+        address consumer,
+        uint256 requestId,
+        uint256[] calldata randomWords,
+        uint32 callbackGasLimit
+    ) external {
+        uint256 gasBefore = gasleft();
+
+        (bool success, bytes memory returnData) = consumer.call{gas: callbackGasLimit}(
+            abi.encodeWithSignature("rawFulfillRandomWords(uint256,uint256[])", requestId, randomWords)
+        );
+
+        lastCallbackGasUsed = gasBefore - gasleft();
 
         if (!success) {
             assembly {

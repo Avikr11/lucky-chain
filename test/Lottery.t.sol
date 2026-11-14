@@ -87,6 +87,30 @@ contract ReentrantRefundRecipient {
     }
 }
 
+contract ReentrantManager {
+    Lottery public lottery;
+    uint256 public receiveCount;
+    bool public reentryBlocked;
+
+    constructor() payable {}
+
+    function deployLottery(address coordinator) external {
+        lottery = new Lottery(coordinator, 123, bytes32(uint256(456)));
+    }
+
+    function recoverSurplus() external {
+        lottery.recoverSurplus();
+    }
+
+    receive() external payable {
+        receiveCount++;
+
+        (bool success,) = address(lottery).call(abi.encodeWithSelector(Lottery.recoverSurplus.selector));
+
+        reentryBlocked = !success;
+    }
+}
+
 contract LotteryTest is Test {
     Lottery lottery;
     MockVRFCoordinatorV2Plus coordinator;
@@ -213,6 +237,59 @@ contract LotteryTest is Test {
         assertEq(lottery.randomWord(), 42);
     }
 
+    function test_MeasureVRFCallbackGas() public {
+        uint256 fee = lottery.ENTRY_FEE();
+
+        vm.prank(alice);
+        lottery.enterLottery{value: fee}();
+
+        vm.warp(lottery.roundEndTime());
+        lottery.closeLottery();
+
+        uint256[] memory words = new uint256[](1);
+        words[0] = 42;
+
+        uint256 requestId = lottery.lastRequestId();
+
+        // Simulate callback execution with cold Lottery storage.
+        vm.cool(address(lottery));
+
+        coordinator.fulfillWithGas(address(lottery), requestId, words, 1_000_000);
+
+        assertTrue(lottery.randomnessFulfilled());
+        assertEq(lottery.randomWord(), 42);
+
+        emit log_named_uint("VRF callback gas used", coordinator.lastCallbackGasUsed());
+    }
+
+    function test_MeasureVRFCallbackGasTwoPlayers() public {
+        uint256 fee = lottery.ENTRY_FEE();
+
+        vm.prank(alice);
+        lottery.enterLottery{value: fee}();
+
+        vm.prank(bob);
+        lottery.enterLottery{value: fee}();
+
+        vm.warp(lottery.roundEndTime());
+        lottery.closeLottery();
+
+        uint256[] memory words = new uint256[](1);
+        words[0] = 42;
+
+        uint256 requestId = lottery.lastRequestId();
+
+        // Simulate callback execution with cold Lottery storage.
+        vm.cool(address(lottery));
+
+        coordinator.fulfillWithGas(address(lottery), requestId, words, 1_000_000);
+
+        assertTrue(lottery.randomnessFulfilled());
+        assertEq(lottery.randomWord(), 42);
+
+        emit log_named_uint("Two-player VRF callback gas used", coordinator.lastCallbackGasUsed());
+    }
+
     function test_RevertWhen_NonCoordinatorCallsCallback() public {
         uint256[] memory words = new uint256[](1);
         words[0] = 42;
@@ -319,7 +396,7 @@ contract LotteryTest is Test {
         vm.warp(lottery.roundEndTime());
         lottery.closeLottery();
 
-        vm.warp(block.timestamp + lottery.VRF_TIMEOUT());
+        vm.warp(vm.getBlockTimestamp() + lottery.VRF_TIMEOUT());
         lottery.abortLottery();
 
         assertEq(lottery.roundRefundCredits(1, alice), fee);
@@ -451,6 +528,8 @@ contract LotteryTest is Test {
 
         lottery.startNextRound();
 
+        assertEq(lottery.getPlayersCount(), 0);
+
         assertEq(lottery.currentRoundId(), 2);
         assertEq(uint256(lottery.state()), uint256(Lottery.LotteryState.OPEN));
         assertEq(lottery.roundEndTime(), block.timestamp + lottery.ROUND_DURATION());
@@ -463,7 +542,12 @@ contract LotteryTest is Test {
         vm.prank(bob);
         lottery.enterLottery{value: fee}();
 
-        assertEq(lottery.getPlayersCount(), 2);
+        assertEq(lottery.getPlayersCount(), 1);
+        assertEq(lottery.getPlayers()[0], bob);
+
+        // Legacy global player storage retains historical entries.
+        assertEq(lottery.players(0), alice);
+        assertEq(lottery.players(1), bob);
         assertEq(address(lottery).balance, 2 * fee);
     }
 
@@ -1344,5 +1428,88 @@ contract LotteryTest is Test {
         lottery.withdrawWinningsTo(payable(address(0)));
 
         assertEq(lottery.pendingWinnings(alice), fee);
+    }
+
+    function test_NewRoundDoesNotInheritPreviousRoundRandomnessStatus() public {
+        uint256 fee = lottery.ENTRY_FEE();
+
+        vm.prank(alice);
+        lottery.enterLottery{value: fee}();
+
+        vm.warp(lottery.roundEndTime());
+        lottery.closeLottery();
+
+        uint256[] memory words = new uint256[](1);
+        words[0] = 42;
+
+        uint256 requestId = lottery.lastRequestId();
+        coordinator.fulfill(address(lottery), requestId, words);
+
+        // Round 1 has completed its randomness callback.
+        assertTrue(lottery.randomnessFulfilled());
+        assertEq(lottery.randomWord(), 42);
+        assertEq(lottery.winner(), alice);
+
+        lottery.startNextRound();
+
+        // Round 2 is OPEN, but legacy randomness fields still
+        // contain Round 1's completed result.
+        assertEq(lottery.currentRoundId(), 2);
+        assertEq(uint256(lottery.state()), uint256(Lottery.LotteryState.OPEN));
+        assertTrue(lottery.randomnessFulfilled());
+        assertEq(lottery.randomWord(), 42);
+        assertEq(lottery.winner(), alice);
+    }
+
+    function test_GetRoundResultPreservesHistoricalResults() public {
+        uint256 fee = lottery.ENTRY_FEE();
+
+        vm.prank(alice);
+        lottery.enterLottery{value: fee}();
+
+        vm.warp(lottery.roundEndTime());
+        lottery.closeLottery();
+
+        uint256[] memory words = new uint256[](1);
+        words[0] = 42;
+
+        uint256 requestId = lottery.lastRequestId();
+        coordinator.fulfill(address(lottery), requestId, words);
+
+        lottery.startNextRound();
+
+        // Historical Round 1 result must remain available.
+        (uint256 oldWord, address oldWinner, Lottery.LotteryState oldState) = lottery.getRoundResult(1);
+
+        assertEq(oldWord, 42);
+        assertEq(oldWinner, alice);
+        assertEq(uint256(oldState), uint256(Lottery.LotteryState.PAYOUT));
+
+        // New Round 2 must have no inherited result.
+        (uint256 newWord, address newWinner, Lottery.LotteryState newState) = lottery.getRoundResult(2);
+
+        assertEq(newWord, 0);
+        assertEq(newWinner, address(0));
+        assertEq(uint256(newState), uint256(Lottery.LotteryState.OPEN));
+    }
+
+    function test_ReentrancyCannotRecoverSurplusTwice() public {
+        ReentrantManager attacker = new ReentrantManager();
+
+        // The attacker contract deploys the Lottery and becomes its manager.
+        attacker.deployLottery(address(coordinator));
+
+        Lottery managedLottery = attacker.lottery();
+
+        // Force 1 ETH surplus into the Lottery.
+        ForceEther forceEther = new ForceEther{value: 1 ether}();
+        forceEther.forceSend(payable(address(managedLottery)));
+
+        // Manager attempts recovery; its receive() function reenters.
+        attacker.recoverSurplus();
+
+        assertEq(attacker.receiveCount(), 1);
+        assertTrue(attacker.reentryBlocked());
+        assertEq(address(managedLottery).balance, 0);
     }
 }

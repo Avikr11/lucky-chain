@@ -230,7 +230,7 @@ export function LotteryCard() {
 
             <p className="mt-4 max-w-md text-sm leading-6 text-gray-400">
               Prize recorded on-chain for the most recently completed lottery
-              round. This is not the current round's jackpot.
+              round. This is not the current round&apos;s jackpot.
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">

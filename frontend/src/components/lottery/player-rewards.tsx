@@ -18,7 +18,6 @@ export function PlayerRewards() {
   >(null);
 
   const {
-    address,
     submittedBy,
     isDifferentWalletOrNetwork,
     isConnected,
@@ -279,10 +278,9 @@ export function PlayerRewards() {
             !hasCurrentRefund &&
             (historicalRefunds.data?.length ?? 0) === 0 && (
               <p className="mt-4 text-sm text-amber-300/90">
-                A refund credit remains in aggregate accounting, but no
-                current or historical round refund is presently eligible
-                for withdrawal. The contract only permits claims from rounds
-                in the REFUND state.
+                Your recorded entries are not currently eligible for a
+                refund. Refunds can only be claimed when a round enters the
+                REFUND state.
               </p>
             )}
 

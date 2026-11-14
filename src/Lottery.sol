@@ -13,7 +13,7 @@ contract Lottery is VRFConsumerBaseV2Plus {
     uint256 public constant VRF_TIMEOUT = 24 hours;
 
     uint16 public constant REQUEST_CONFIRMATIONS = 3;
-    uint32 public constant CALLBACK_GAS_LIMIT = 100_000;
+    uint32 public constant CALLBACK_GAS_LIMIT = 1_000_000;
     uint32 public constant NUM_WORDS = 1;
 
     uint256 public immutable subscriptionId;
@@ -48,7 +48,6 @@ contract Lottery is VRFConsumerBaseV2Plus {
         uint256 prizeAmount;
         address winner;
         LotteryState state;
-        bool randomnessFulfilled;
     }
 
     uint256 public currentRoundId;
@@ -174,11 +173,24 @@ contract Lottery is VRFConsumerBaseV2Plus {
     }
 
     function getPlayers() external view returns (address[] memory) {
-        return players;
+        return rounds[currentRoundId].players;
     }
 
     function getPlayersCount() external view returns (uint256) {
-        return players.length;
+        return rounds[currentRoundId].players.length;
+    }
+
+    /// @notice Returns the result and state of a specific round.
+    function getRoundResult(uint256 roundId)
+        external
+        view
+        returns (uint256 roundRandomWord, address roundWinner, LotteryState roundState)
+    {
+        require(roundId > 0 && roundId <= currentRoundId, "Invalid round ID");
+
+        Round storage requestedRound = rounds[roundId];
+
+        return (requestedRound.randomWord, requestedRound.winner, requestedRound.state);
     }
 
     function withdrawWinnings() external {
@@ -222,12 +234,10 @@ contract Lottery is VRFConsumerBaseV2Plus {
 
         require(requestedRound.state == LotteryState.CALCULATING, "Lottery not calculating");
         require(requestId == requestedRound.requestId, "Unknown request ID");
-        require(!requestedRound.randomnessFulfilled, "Randomness already fulfilled");
         require(randomWords.length > 0, "No random words");
 
         uint256 word = randomWords[0];
         requestedRound.randomWord = word;
-        requestedRound.randomnessFulfilled = true;
 
         uint256 winnerIndex = word % requestedRound.players.length;
         address roundWinner = requestedRound.players[winnerIndex];
