@@ -6,11 +6,8 @@ import {Test} from "forge-std/Test.sol";
 contract ForkCallbackGasTest is Test {
     function test_ReplayFullVRFFulfillment() public {
         if (
-            !vm.envExists("ALT_ARCHIVE_RPC") ||
-            !vm.envExists("CONTRACT") ||
-            !vm.envExists("VRF_COORDINATOR") ||
-            !vm.envExists("FULFILLMENT_TX_SENDER") ||
-            !vm.envExists("FULFILLMENT_CALLDATA")
+            !vm.envExists("ALT_ARCHIVE_RPC") || !vm.envExists("CONTRACT") || !vm.envExists("VRF_COORDINATOR")
+                || !vm.envExists("FULFILLMENT_TX_SENDER") || !vm.envExists("FULFILLMENT_CALLDATA")
         ) {
             vm.skip(true);
             return;
